@@ -77,3 +77,107 @@ function createCylinder(segments = 64, uRepeat = 3) {
     indices: new Uint16Array(indices)
   };
 }
+
+
+// ---------------------------------------------------------------------------
+// Task 1: sphere, torus, cone
+// ---------------------------------------------------------------------------
+
+function emptyMeshData() {
+  return { positions: [], normals: [], tangents: [], texCoords: [], indices: [] };
+}
+
+function toTypedMesh(d) {
+  return {
+    positions: new Float32Array(d.positions),
+    normals: new Float32Array(d.normals),
+    tangents: new Float32Array(d.tangents),
+    texCoords: new Float32Array(d.texCoords),
+    indices: new Uint16Array(d.indices)
+  };
+}
+
+function addParametricGrid(d, cols, rows, surface) {
+  const base = d.positions.length / 3;
+  for (let j = 0; j <= rows; j++) {
+    for (let i = 0; i <= cols; i++) {
+      const { p, n, t, uv } = surface(i / cols, j / rows);
+      d.positions.push(...p);
+      d.normals.push(...n);
+      d.tangents.push(...t);
+      d.texCoords.push(...uv);
+    }
+  }
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const a = base + j * (cols + 1) + i, b = a + 1;
+      const c = a + cols + 1, e = c + 1;
+      d.indices.push(a, b, e, a, e, c);
+    }
+  }
+}
+
+function createSphere(cols = 64, rows = 32, uRepeat = 2, vRepeat = 1) {
+  const d = emptyMeshData();
+  addParametricGrid(d, cols, rows, (u, v) => {
+    const theta = 2 * Math.PI * u, phi = Math.PI * v;
+    const s = Math.sin(theta), c = Math.cos(theta);
+    const r = Math.sin(phi), y = -Math.cos(phi);
+    const p = [r * s, y, r * c];
+    return { p, n: p, t: [c, 0, -s], uv: [u * uRepeat, v * vRepeat] };
+  });
+  return toTypedMesh(d);
+}
+
+function createTorus(R = 1, r = 0.4, cols = 96, rows = 32, uRepeat = 4, vRepeat = 1) {
+  const d = emptyMeshData();
+  addParametricGrid(d, cols, rows, (u, v) => {
+    const theta = 2 * Math.PI * u, phi = 2 * Math.PI * v;
+    const s = Math.sin(theta), c = Math.cos(theta);
+    const cp = Math.cos(phi), sp = Math.sin(phi);
+    const ring = R + r * cp;
+    return {
+      p: [ring * s, r * sp, ring * c],
+      n: [cp * s, sp, cp * c],
+      t: [c, 0, -s],
+      uv: [u * uRepeat, v * vRepeat]
+    };
+  });
+  return toTypedMesh(d);
+}
+
+function createCone(cols = 64, rows = 16, uRepeat = 3, vRepeat = 1) {
+  const d = emptyMeshData();
+  const h = 2, R = 1, len = Math.hypot(h, R);
+
+  addParametricGrid(d, cols, rows, (u, v) => {
+    const theta = 2 * Math.PI * u;
+    const s = Math.sin(theta), c = Math.cos(theta);
+    const radius = R * (1 - v);
+    return {
+      p: [radius * s, -1 + h * v, radius * c],
+      n: [h * s / len, R / len, h * c / len],
+      t: [c, 0, -s],
+      uv: [u * uRepeat, v * vRepeat]
+    };
+  });
+
+  const center = d.positions.length / 3;
+  d.positions.push(0, -1, 0);
+  d.normals.push(0, -1, 0);
+  d.tangents.push(1, 0, 0);
+  d.texCoords.push(0.5, 0.5);
+  for (let i = 0; i <= cols; i++) {
+    const theta = 2 * Math.PI * i / cols;
+    const s = Math.sin(theta), c = Math.cos(theta);
+    d.positions.push(s, -1, c);
+    d.normals.push(0, -1, 0);
+    d.tangents.push(1, 0, 0);
+    d.texCoords.push(0.5 + 0.5 * s, 0.5 + 0.5 * c);
+  }
+  for (let i = 0; i < cols; i++) {
+    const a = center + 1 + i, b = a + 1;
+    d.indices.push(center, b, a);
+  }
+  return toTypedMesh(d);
+}

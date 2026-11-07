@@ -42,3 +42,7 @@ function transformPoint(m, [x, y, z]) {
 }
 
 const ROTATE = { x: rotateX, y: rotateY, z: rotateZ };
+
+function scale(s) {
+  return new Float32Array([s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, 0, 0, 0, 1]);
+}

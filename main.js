@@ -36,8 +36,10 @@ in vec3 vTangent;
 in vec2 vTexCoord;
 
 uniform vec3 uLightPos;
-uniform sampler2D uTexture;
-uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping
+uniform sampler2D uTexture;    // color texture (or the normal map in mode 1)
+uniform sampler2D uNormalMap;
+uniform int uMapping;  // 0 = bump mapping, 1 = normal mapping, 2 = plain texture,
+                       // 3 = normal mapping on top of a color texture
 
 out vec4 fragColor;
 
@@ -68,10 +70,18 @@ void main() {
     float dhdv = (height(vTexCoord + dv) - height(vTexCoord - dv)) * 0.5;
     n = normalize(vec3(-bumpScale * dhdu, -bumpScale * dhdv, 1.0));
     baseColor = texture(uTexture, vTexCoord).rgb;
-  } else {
+  } else if (uMapping == 1) {
     // Normal mapping: the texture stores the tangent-space normal in [0, 1]
     n = normalize(texture(uTexture, vTexCoord).rgb * 2.0 - 1.0);
     baseColor = vec3(0.85, 0.65, 0.3);
+  } else if (uMapping == 3) {
+    // Normal mapping with a color texture
+    n = normalize(texture(uNormalMap, vTexCoord).rgb * 2.0 - 1.0);
+    baseColor = texture(uTexture, vTexCoord).rgb;
+  } else {
+    // Plain texture mapping
+    n = vec3(0.0, 0.0, 1.0);
+    baseColor = texture(uTexture, vTexCoord).rgb;
   }
 
   vec3 Ka = 0.2 * baseColor;
@@ -135,6 +145,7 @@ function updateProgram() {
     uLightPos = gl.getUniformLocation(program, "uLightPos");
     uMapping = gl.getUniformLocation(program, "uMapping");
     gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
+    gl.uniform1i(gl.getUniformLocation(program, "uNormalMap"), 1);
     shaderError.textContent = "";
   } catch (e) {
     shaderError.textContent = e.message.replace(/\0/g, "");
@@ -165,6 +176,9 @@ function createMesh({ positions, normals, tangents, texCoords, indices }) {
 
 const cubeMesh = createMesh(createCube());
 const cylinderMesh = createMesh(createCylinder());
+const sphereMesh = createMesh(createSphere(64, 32, 1, 1));  // wrap flower2 once around
+const torusMesh = createMesh(createTorus());
+const coneMesh = createMesh(createCone());
 
 function loadTexture(url) {
   const texture = gl.createTexture();
@@ -183,13 +197,56 @@ function loadTexture(url) {
   return texture;
 }
 
+// Animated texture (Task 2): load a real GIF file, decode all of its frames
+// (gif.js), then re-upload the current frame to the GPU as time passes.
+// WebGL alone would only ever show a GIF's first frame.
+function loadGifTexture(url) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 255, 255]));
+
+  let gif = null, totalMs = 0, shownFrame = -1;
+  fetch(url)
+    .then(response => response.arrayBuffer())
+    .then(buffer => {
+      gif = decodeGIF(buffer);
+      totalMs = gif.frames.reduce((sum, f) => sum + f.delay, 0);
+    })
+    .catch(err => console.error("Could not load GIF " + url, err));
+
+  function update(timeMs) {
+    if (!gif) return;
+    // Find which frame should be showing, using each frame's own delay
+    let t = timeMs % totalMs, frame = 0;
+    while (t >= gif.frames[frame].delay) { t -= gif.frames[frame].delay; frame++; }
+    if (frame === shownFrame) return;  // only upload when the frame changes
+    shownFrame = frame;
+
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gif.width, gif.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, gif.frames[frame].pixels);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  }
+  return { texture, update };
+}
+
 const brickTexture = loadTexture("brick.png");
 const normalTexture = loadTexture("texture2.jpg");
+const iceTexture = loadTexture("ice.jpg");
+const brickNormalMap = loadTexture("brick_normal.png");  // normal map made from brick.png
+const flower2Texture = loadTexture("flower2.jpg");
+const flowerAnim = loadGifTexture("flower.gif");  // animated GIF
 
-const BUMP_MAPPING = 0, NORMAL_MAPPING = 1;
+const BUMP_MAPPING = 0, NORMAL_MAPPING = 1, TEXTURE_ONLY = 2, COLOR_NORMAL_MAPPING = 3;
 const objects = [
-  { mesh: cubeMesh, texture: brickTexture, mapping: BUMP_MAPPING, offset: [-1.8, 0, 0] },
-  { mesh: cylinderMesh, texture: normalTexture, mapping: NORMAL_MAPPING, offset: [1.8, 0, 0] }
+  { mesh: cubeMesh, texture: iceTexture, mapping: BUMP_MAPPING, offset: [-1.4, 1.5, 0], scale: 0.8 },
+  { mesh: cylinderMesh, texture: normalTexture, mapping: NORMAL_MAPPING, offset: [1.4, 1.5, 0], scale: 0.8 },
+  { mesh: sphereMesh, texture: flower2Texture, mapping: BUMP_MAPPING,
+    offset: [-2.8, -1.5, 0], scale: 0.8 },
+  { mesh: torusMesh, texture: brickTexture, normalMap: brickNormalMap, mapping: COLOR_NORMAL_MAPPING,
+    offset: [0, -1.5, 0], scale: 0.8 },
+  { mesh: coneMesh, texture: flowerAnim.texture, mapping: TEXTURE_ONLY, offset: [2.8, -1.5, 0], scale: 0.8 }
 ];
 
 gl.enable(gl.DEPTH_TEST);
@@ -199,7 +256,7 @@ const lightWorld = [3, 4, 5];
 
 // Interactive controls
 let dragRotX = 0, dragRotY = -0.5;      // mouse drag
-let camX = 0, camY = 0, camZ = -7;      // arrow keys, w, s
+let camX = 0, camY = 0, camZ = -9;      // arrow keys, w, s
 let sliderAngle = 0;                    // degrees
 let spinning = false, spinAngle = 0;    // Start/Stop button
 
@@ -251,9 +308,16 @@ function render(time) {
   const rotation = multiply(multiply(rotateY(dragRotY), rotateX(dragRotX)), axisRotation);
 
   gl.activeTexture(gl.TEXTURE0);
-  for (const { mesh, texture, mapping, offset } of objects) {
-    gl.uniformMatrix4fv(uModelView, false, multiply(view, multiply(translate(...offset), rotation)));
+  flowerAnim.update(time);  // advance the animated texture
+  for (const { mesh, texture, normalMap, mapping, offset, scale: s = 1, color } of objects) {
+    const model = multiply(translate(...offset), multiply(rotation, scale(s)));
+    gl.uniformMatrix4fv(uModelView, false, multiply(view, model));
     gl.uniform1i(uMapping, mapping);
+    if (normalMap) {
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, normalMap);
+      gl.activeTexture(gl.TEXTURE0);
+    }
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.bindVertexArray(mesh.vao);
     gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
